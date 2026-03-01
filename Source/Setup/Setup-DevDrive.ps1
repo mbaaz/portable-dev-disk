@@ -5,19 +5,46 @@
 # What this script does:
 #   1. Detects its own volume GUID from the script location
 #   2. Finds the current drive letter of the NTFS partition
-#   3. If not on X:, uses diskpart to reassign the letter atomically
-#   4. Ensures X:\DevDrive mount folder exists
-#   5. Mounts the DevDrive VHD at X:\DevDrive (if not already mounted)
-#   6. Trusts the Dev Drive (skips if already trusted)
+#   3. If not on configured drive letter, reassigns the letter atomically
+#   4. Ensures DevDrive mount folder exists
+#   5. Mounts the DevDrive VHD at DevDrive mount folder (if not already mounted)
+#   6. Trusts the DevDrive (skips if already trusted)
 
 # ---------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------
-$TargetLetter = "X" # Desired drive letter for the NTFS partition
-$DevDriveFolderName = "DevDrive" # Mount point folder name on the NTFS partition
-$VhdFileName = "Setup`\DevDrive.vhdx" # Name of the VHD file inside Setup
+$TotalSteps = 6
+$ConfigFile = Join-Path $PSScriptRoot "config.ps1"
+if (-not (Test-Path $ConfigFile)) {
+    Write-Error "Configuration file not found: $ConfigFile"
+    Read-Host "Press Enter to close"
+    exit 1
+}
+. $ConfigFile # Load configuration variables from separate file
+
+# ---------------------------------------------------------------
+# HELPER FUNCTIONS
 # ---------------------------------------------------------------
 
+function Get-VolumeGUIDFromDriveLetter($driveLetter) {
+    $volume = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
+    if ($volume) {
+        return $volume.UniqueId.Trim()
+    } else {
+        return $null
+    }
+}
+
+function Get-VolumeDriveLetterFromGUID($volumeGUID) {
+    $volume = Get-Volume -UniqueId $volumeGUID -ErrorAction SilentlyContinue
+    if ($volume) {
+        return $volume.DriveLetter.ToString().ToUpper()
+    } else {
+        return $null
+    }
+}
+
+# ---------------------------------------------------------------
 # Require Administrator
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Error "This script must be run as Administrator."
@@ -25,98 +52,69 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     exit 1
 }
 
+# ---------------------------------------------------------------
+# STEP 0: Welcome message and configuration display
+# ---------------------------------------------------------------
 Write-Host "`n=== Portable Dev Drive Setup ===" -ForegroundColor Cyan
 
-Write-Host "`n[0/6] Configuration:" -ForegroundColor Yellow
+Write-Host "`n[0/$TotalSteps] Configuration:" -ForegroundColor Yellow
 Write-Host "  Target Letter: ${TargetLetter}:" -ForegroundColor White
 Write-Host "DevDrive Folder: ${DevDriveFolderName}" -ForegroundColor White
 Write-Host "       VHD File: ${VhdFileName}" -ForegroundColor White
 
 # ---------------------------------------------------------------
-# [1/6] Detect our own volume GUID from the script's location
+# STEP 1: Detect our own volume GUID from the script's location
 # ---------------------------------------------------------------
-Write-Host "`n[1/6] Detecting volume GUID from script location..." -ForegroundColor Yellow
+Write-Host "`n[1/$TotalSteps] Determining volume GUID..." -ForegroundColor Yellow
 
-$ScriptDriveLetter = (Split-Path -Qualifier $PSScriptRoot).TrimEnd(":")
-$VolumeGUID = (Get-Volume -DriveLetter $ScriptDriveLetter 2>$null).UniqueId | Out-String
+if($UseCurrentDrive) {
+    Write-Host "Using current drive detection method" -ForegroundColor Green
+    $ScriptDriveLetter = (Split-Path -Qualifier $PSScriptRoot).TrimEnd(":").ToUpper()
+    $VolumeGUID = Get-VolumeGUIDFromDriveLetter $ScriptDriveLetter
+} else {
+    Write-Host "Using hardcoded volume GUID from config" -ForegroundColor Green
+    $VolumeGUID = $UseVolumeGUID
+}
 
 if (-not $VolumeGUID) {
-    Write-Error "`nCould not determine volume GUID from script location '${ScriptDriveLetter}:'."
+    Write-Error "`nVolume GUID '${VolumeGUID}' is not available"
     Read-Host "`nPress Enter to close"
     exit 1
 }
-
-$VolumeGUID = $VolumeGUID.Trim()
 Write-Host "Volume GUID: ${VolumeGUID}" -ForegroundColor Green
 
-$CurrentLetter = $ScriptDriveLetter
+$CurrentLetter = Get-VolumeDriveLetterFromGUID $VolumeGUID
+if(-not $CurrentLetter) {
+    Write-Error "Could not find a drive letter for volume GUID '${VolumeGUID}'. Make sure the drive is connected and the GUID is correct."
+    Read-Host "Press Enter to close"
+    exit 1
+}
 Write-Host "Portable drive is currently on ${CurrentLetter}:" -ForegroundColor Green
 
 # ---------------------------------------------------------------
-# [2/6] Reassign to X: if not already there, using diskpart
+# STEP 2: Reassign to X: if not already there
 # ---------------------------------------------------------------
-Write-Host "`n[2/6] Checking drive letter assignment..." -ForegroundColor Yellow
-
-
-exit 1
+Write-Host "`n[2/$TotalSteps] Checking drive letter assignment..." -ForegroundColor Yellow
 
 
 if ($CurrentLetter -eq $TargetLetter) {
     Write-Host "Drive is already on ${TargetLetter}:, nothing to do." -ForegroundColor Green
 } else {
-    #$xCheck = (mountvol "${TargetLetter}:" /L 2>$null).Trim()
-    $xCheck = (Get-Volume -DriveLetter X 2>$null).UniqueId | Out-String
-    if($xCheck) { $xCheck.Trim() }
-    $xIsFree = [string]::IsNullOrEmpty($xCheck)
+    $TargetLetterCheck = Get-VolumeGUIDFromDriveLetter $TargetLetter
+    $TargetLetterIsFree = [string]::IsNullOrEmpty($TargetLetterCheck)
 
-    if (-not $xIsFree) {
-        Write-Error "${TargetLetter}: is in use by another volume (${xCheck}). Please free ${TargetLetter}: manually and try again."
+    if (-not $TargetLetterIsFree) {
+        Write-Error "${TargetLetter}: is in use by another volume (${TargetLetterCheck}). Please free ${TargetLetter}: manually and try again."
         Read-Host "Press Enter to close"
         exit 1
     }
 
-    Write-Host "Reassigning [${CurrentLetter}:] to [${TargetLetter}:]..." -ForegroundColor Yellow
-
-    #$diskpartScript = @"
-#select volume $CurrentLetter
-#assign letter=$TargetLetter
-#"@
-    #$tempScript = "$env:TEMP\dp_assign.txt"
-    #$diskpartScript | Set-Content -Path $tempScript -Encoding ASCII
-    #diskpart /s $tempScript | Out-Null
-    #Remove-Item $tempScript -Force
-
+    Write-Host "Reassigning [${CurrentLetter}:] to [${TargetLetter}:]..." -ForegroundColor Green
     Get-Partition -DriveLetter $CurrentLetter | Set-Partition -NewDriveLetter $TargetLetter
 
-    # Retry loop — diskpart returns before Windows fully registers the new letter
-    $maxAttempts = 10
-    $attempt = 0
-    $letterConfirmed = $false
-    do {
-        Start-Sleep -Milliseconds 500
-        $attempt++
-        
-        $match = Get-Volume -UniqueId $VolumeGUID | Where-Object { $_.DriveLetter -eq $TargetLetter }
-        Write-Host "  [attempt ${attempt}] result: '${match}'" -ForegroundColor DarkGray
-        if ($match) {
-            #Write-Host "Remap successful."
-            $letterConfirmed = $true
-        }
-        else {
-            #Write-Host "Remap NOT complete."
-        }
-        
-        #$verifyRaw = mountvol "${TargetLetter}:" /L 2>$null
-        #$verifyRaw = mountvol "${TargetLetter}:" /L 2>$null
-        #$verify = if ($verifyRaw) { $verifyRaw.Trim() } else { "" }
-        #Write-Host "  [attempt ${attempt}] mountvol result: '${verify}' [$verifyRaw]" -ForegroundColor DarkGray
-        #if ($verify -eq $VolumeGUID) {
-        #    $letterConfirmed = $true
-        #}
-    } until ($letterConfirmed -or $attempt -ge $maxAttempts)
-
-    if (-not $letterConfirmed) {
-        Write-Error "Letter reassignment failed after ${maxAttempts} attempts. Last mountvol output: '${verify}'. Try running diskpart manually: select volume ${CurrentLetter} then assign letter=${TargetLetter}"
+    $TargetLetterCheck = Get-VolumeGUIDFromDriveLetter $TargetLetter
+    if($TargetLetterCheck -ne $VolumeGUID) {
+        Write-Error "Drive letter reassignment failed. Expected volume GUID '${VolumeGUID}', but ${TargetLetter}: has '${TargetLetterCheck}'."
         Read-Host "Press Enter to close"
         exit 1
     }
@@ -126,87 +124,104 @@ if ($CurrentLetter -eq $TargetLetter) {
 }
 
 # ---------------------------------------------------------------
-# [3/6] Ensure X:\DevDrive mount folder exists
+# STEP 3: Ensure DevDrive mount folder exists
 # ---------------------------------------------------------------
-$DevDrivePath = "${CurrentLetter}:\${DevDriveFolderName}"
-Write-Host "`n[3/6] Checking DevDrive mount folder at ${DevDrivePath}..." -ForegroundColor Yellow
+$DevDriveMountPath = "${CurrentLetter}:\${DevDriveFolderName}"
+Write-Host "`n[3/$TotalSteps] Checking DevDrive mount folder..." -ForegroundColor Yellow
 
-if (-not (Test-Path $DevDrivePath)) {
-    Write-Host "Mount folder does not exist, creating it..." -ForegroundColor Yellow
-    New-Item -ItemType Directory -Path $DevDrivePath | Out-Null
-    Write-Host "Created ${DevDrivePath}" -ForegroundColor Green
+if (-not (Test-Path $DevDriveMountPath)) {
+    Write-Host "Mount folder does not exist, creating it..." -ForegroundColor Green
+    New-Item -ItemType Directory -Path $DevDriveMountPath | Out-Null
+    Write-Host "Created ${DevDriveMountPath}" -ForegroundColor Green
 } else {
-    Write-Host "Mount folder exists." -ForegroundColor Green
+    Write-Host "Mount folder exists" -ForegroundColor Green
 }
 
 # ---------------------------------------------------------------
-# [4/6] Mount the VHD at X:\DevDrive (if not already mounted)
+# STEP 4: Mount the VHD at X:\DevDrive (if not already mounted)
 # ---------------------------------------------------------------
-$VhdPath = "${CurrentLetter}:\_Setup\${VhdFileName}"
-Write-Host "`n[4/6] Mounting VHD from ${VhdPath}..." -ForegroundColor Yellow
+$VhdPath = "${CurrentLetter}:\${VhdFileName}"
+Write-Host "`n[4/$TotalSteps] Mounting DevDrive VHD..." -ForegroundColor Yellow
 
 if (-not (Test-Path $VhdPath)) {
-    Write-Error "VHD file not found at '${VhdPath}'. Make sure '${VhdFileName}' is in the _Setup folder."
+    Write-Error "VHD file not found at '${VhdPath}'. Make sure the path is configured correctly."
     Read-Host "Press Enter to close"
     exit 1
 }
 
 $diskImage = Get-DiskImage -ImagePath $VhdPath 2>$null
+
 if ($diskImage -and $diskImage.Attached) {
     Write-Host "VHD is already mounted." -ForegroundColor Green
-    $disk = $diskImage
-    $partition = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
-    $devVolName = ($partition.AccessPaths | Where-Object { $_ -like "\\?\Volume*" } | Select-Object -First 1)
-    $folderMounted = mountvol $DevDrivePath /L 2>$null
-    if($folderMounted) { $folderMounted.Trim() }
-    if ($folderMounted -and $folderMounted -notmatch "cannot find") {
-        Write-Host "VHD is mounted at ${DevDrivePath}." -ForegroundColor Green
-    } else {
-        Write-Host "VHD is mounted but not at ${DevDrivePath}, fixing..." -ForegroundColor Yellow
-        Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $DevDrivePath
-    }
 } else {
+    # Try to mount the VHD without assigning a drive letter (we'll assign the folder mount point later)
     try {
         Mount-DiskImage -ImagePath $VhdPath -NoDriveLetter -ErrorAction Stop | Out-Null
-        Write-Host "VHD mounted successfully." -ForegroundColor Green
+        Write-Host "VHD mounted successfully" -ForegroundColor Green
     } catch {
         Write-Error "Failed to mount VHD: $_"
         Read-Host "Press Enter to close"
         exit 1
     }
 
+    # Allow some time for the system to recognize the new disk and partition before we try to find it
     Start-Sleep -Milliseconds 1000
-    $disk = Get-DiskImage -ImagePath $VhdPath
-    $partition = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
-
-    if (-not $partition) {
-        Write-Error "Could not find partition inside mounted VHD."
+    
+    # Update the disk information for the mounted VHD
+    $diskImage = Get-DiskImage -ImagePath $VhdPath
+    if (-not $diskImage -or -not $diskImage.Attached) {
+        Write-Error "VHD was mounted but could not be found in disk list."
         Read-Host "Press Enter to close"
         exit 1
+    }    
+}
+
+# ---------------------------------------------------------------
+# STEP 5: Remove any stray drive letter Windows assigned to the VHD
+# ---------------------------------------------------------------
+Write-Host "`n[5/$TotalSteps] Checking access points to VHD volume..." -ForegroundColor Yellow
+
+# Find partition on the mounted VHD (assuming there's only one partition and it's not a Reserved partition)
+$partition = Get-Partition -DiskNumber $diskImage.Number | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
+if (-not $partition) {
+    Write-Error "Could not find partition inside mounted VHD."
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
+$devDriveVolumeID = ($partition.AccessPaths | Where-Object { $_ -like "\\?\Volume*" } | Select-Object -First 1)
+if (-not $devDriveVolumeID) {
+    Write-Error "Could not determine volume GUID of mounted VHD."
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
+# Determine the expected DevDrive path (e.g. X:\DevDrive)
+$DevDrivePath = "${CurrentLetter}:\${DevDriveFolderName}"
+$DevDriveIsMounted = $false
+
+# Remove any auto-assigned access paths (drive letters or folders)
+$existingPaths = $partition.AccessPaths | Where-Object { $_ -notlike "\\?\Volume*" }
+foreach ($existingPath in $existingPaths) {
+    # Check if the existing path is the correct DevDrivePath
+    if($existingPath.TrimEnd("\") -eq $DevDrivePath.TrimEnd("\")) {
+        Write-Host "DevDrive is already mounted at ${DevDrivePath}" -ForegroundColor Green
+        $DevDriveIsMounted = $true
+        continue
     }
-
-    $devVolName = ($partition.AccessPaths | Where-Object { $_ -like "\\?\Volume*" } | Select-Object -First 1)
-
-    if (-not $devVolName) {
-        Write-Error "Could not determine volume GUID of mounted VHD."
-        Read-Host "Press Enter to close"
-        exit 1
+    
+    Write-Host "Removing auto-assigned mount path: ${existingPath}" -ForegroundColor Green
+    try {
+        Remove-PartitionAccessPath -DiskNumber $diskImage.Number -PartitionNumber $partition.PartitionNumber -AccessPath $existingPath -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not remove auto-assigned path ${existingPath}: $_"
     }
+}
 
-    # Remove any auto-assigned access paths (drive letters or folders)
-    $existingPaths = $partition.AccessPaths | Where-Object { $_ -notlike "\\?\Volume*" }
-    foreach ($existingPath in $existingPaths) {
-        Write-Host "Removing auto-assigned mount path: ${existingPath}" -ForegroundColor Yellow
-        try {
-            Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $existingPath -ErrorAction Stop
-        } catch {
-            Write-Warning "Could not remove auto-assigned path ${existingPath}: $_"
-        }
-    }
-
+if(-not $DevDriveIsMounted) {
     # Assign the correct folder mount point
     try {
-        Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $DevDrivePath -ErrorAction Stop
+        Add-PartitionAccessPath -DiskNumber $diskImage.Number -PartitionNumber $partition.PartitionNumber -AccessPath $DevDrivePath -ErrorAction Stop
         Write-Host "VHD mounted at ${DevDrivePath}" -ForegroundColor Green
     } catch {
         Write-Error "Failed to mount VHD at ${DevDrivePath}: $_"
@@ -216,54 +231,15 @@ if ($diskImage -and $diskImage.Attached) {
 }
 
 # ---------------------------------------------------------------
-# [5/6] Remove any stray drive letter Windows assigned to the VHD
+# STEP 6: Trust the Dev Drive
 # ---------------------------------------------------------------
-Write-Host "`n[5/6] Checking VHD volume for stray drive letters..." -ForegroundColor Yellow
+Write-Host "`n[6/$TotalSteps] Trusting Dev Drive..." -ForegroundColor Yellow
 
-$rawMountvol = mountvol
-$devRawLines = $rawMountvol -split "`n"
-$devCurrentLetters = @()
-$inOurVolume = $false
-
-foreach ($line in $devRawLines) {
-    $trimmed = $line.Trim()
-    if ($trimmed -eq $devVolName) {
-        $inOurVolume = $true
-        continue
-    }
-    if ($inOurVolume) {
-        if ($trimmed -like "\\?\Volume*") { break }
-        if ($trimmed -match "^([A-Z]):\\$") {
-            $devCurrentLetters += $matches[1]
-        }
-    }
-}
-
-if ($devCurrentLetters.Count -gt 0) {
-    foreach ($devCurrentLetter in $devCurrentLetters) {
-        Write-Host "Removing stray drive letter ${devCurrentLetter}:..." -ForegroundColor Yellow
-        mountvol "${devCurrentLetter}:" /D
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Could not remove drive letter ${devCurrentLetter}: from VHD volume."
-        } else {
-            Write-Host "Drive letter ${devCurrentLetter}: removed." -ForegroundColor Green
-        }
-    }
-    Write-Host "VHD volume is now accessible via ${DevDrivePath} only." -ForegroundColor Green
-} else {
-    Write-Host "No stray drive letters found." -ForegroundColor Green
-}
-
-# ---------------------------------------------------------------
-# [6/6] Trust the Dev Drive
-# ---------------------------------------------------------------
-Write-Host "`n[6/6] Trusting Dev Drive..." -ForegroundColor Yellow
-
-$trustQuery = (fsutil devdrv query $devVolName 2>&1) | Out-String
+$trustQuery = (fsutil devdrv query $devDriveVolumeID 2>&1) | Out-String
 if ($trustQuery -match "Trusted") {
     Write-Host "Status: Trusted (already trusted on this machine)" -ForegroundColor Green
 } else {
-    fsutil devdrv trust $DevDrivePath
+    fsutil devdrv trust $DevDrivePath | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Error "fsutil devdrv trust failed. Try running manually: fsutil devdrv trust ${DevDrivePath}"
     } else {
@@ -272,8 +248,12 @@ if ($trustQuery -match "Trusted") {
 }
 
 Write-Host "`n=== Setup Complete! ===" -ForegroundColor Cyan
-Write-Host "  Drive letter : ${CurrentLetter}:" -ForegroundColor White
+Write-Host "   Drive letter: ${CurrentLetter}:" -ForegroundColor White
 Write-Host "  DevDrive path: ${DevDrivePath}" -ForegroundColor White
 Write-Host ""
 
-Read-Host "Press Enter to close"
+
+
+if($DEBUG -eq $true) {
+    Read-Host "Press Enter to close"
+}

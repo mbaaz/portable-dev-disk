@@ -13,7 +13,7 @@
 # ---------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------
-$TotalSteps = 6
+$TotalSteps = 7
 $ConfigFile = Join-Path $PSScriptRoot "config.ps1"
 if (-not (Test-Path $ConfigFile)) {
     Write-Error "Configuration file not found: $ConfigFile"
@@ -149,9 +149,9 @@ if (-not (Test-Path $VhdPath)) {
     exit 1
 }
 
-$diskImage = Get-DiskImage -ImagePath $VhdPath 2>$null
+$DiskImage = Get-DiskImage -ImagePath $VhdPath 2>$null
 
-if ($diskImage -and $diskImage.Attached) {
+if ($DiskImage -and $DiskImage.Attached) {
     Write-Host "VHD is already mounted." -ForegroundColor Green
 } else {
     # Try to mount the VHD without assigning a drive letter (we'll assign the folder mount point later)
@@ -168,8 +168,8 @@ if ($diskImage -and $diskImage.Attached) {
     Start-Sleep -Milliseconds 1000
     
     # Update the disk information for the mounted VHD
-    $diskImage = Get-DiskImage -ImagePath $VhdPath
-    if (-not $diskImage -or -not $diskImage.Attached) {
+    $DiskImage = Get-DiskImage -ImagePath $VhdPath
+    if (-not $DiskImage -or -not $DiskImage.Attached) {
         Write-Error "VHD was mounted but could not be found in disk list."
         Read-Host "Press Enter to close"
         exit 1
@@ -182,15 +182,15 @@ if ($diskImage -and $diskImage.Attached) {
 Write-Host "`n[5/$TotalSteps] Checking access points to VHD volume..." -ForegroundColor Yellow
 
 # Find partition on the mounted VHD (assuming there's only one partition and it's not a Reserved partition)
-$partition = Get-Partition -DiskNumber $diskImage.Number | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
+$Partition = Get-Partition -DiskNumber $DiskImage.Number | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
 if (-not $partition) {
     Write-Error "Could not find partition inside mounted VHD."
     Read-Host "Press Enter to close"
     exit 1
 }
 
-$devDriveVolumeID = ($partition.AccessPaths | Where-Object { $_ -like "\\?\Volume*" } | Select-Object -First 1)
-if (-not $devDriveVolumeID) {
+$DevDriveVolumeID = ($Partition.AccessPaths | Where-Object { $_ -like "\\?\Volume*" } | Select-Object -First 1)
+if (-not $DevDriveVolumeID) {
     Write-Error "Could not determine volume GUID of mounted VHD."
     Read-Host "Press Enter to close"
     exit 1
@@ -201,27 +201,27 @@ $DevDrivePath = "${CurrentLetter}:\${DevDriveFolderName}"
 $DevDriveIsMounted = $false
 
 # Remove any auto-assigned access paths (drive letters or folders)
-$existingPaths = $partition.AccessPaths | Where-Object { $_ -notlike "\\?\Volume*" }
-foreach ($existingPath in $existingPaths) {
+$ExistingPaths = $Partition.AccessPaths | Where-Object { $_ -notlike "\\?\Volume*" }
+foreach ($ExistingPath in $ExistingPaths) {
     # Check if the existing path is the correct DevDrivePath
-    if($existingPath.TrimEnd("\") -eq $DevDrivePath.TrimEnd("\")) {
+    if($ExistingPath.TrimEnd("\") -eq $DevDrivePath.TrimEnd("\")) {
         Write-Host "DevDrive is already mounted at ${DevDrivePath}" -ForegroundColor Green
         $DevDriveIsMounted = $true
         continue
     }
     
-    Write-Host "Removing auto-assigned mount path: ${existingPath}" -ForegroundColor Green
+    Write-Host "Removing auto-assigned mount path: ${ExistingPath}" -ForegroundColor Green
     try {
-        Remove-PartitionAccessPath -DiskNumber $diskImage.Number -PartitionNumber $partition.PartitionNumber -AccessPath $existingPath -ErrorAction Stop
+        Remove-PartitionAccessPath -DiskNumber $DiskImage.Number -PartitionNumber $Partition.PartitionNumber -AccessPath $ExistingPath -ErrorAction Stop
     } catch {
-        Write-Warning "Could not remove auto-assigned path ${existingPath}: $_"
+        Write-Warning "Could not remove auto-assigned path ${ExistingPath}: $_"
     }
 }
 
 if(-not $DevDriveIsMounted) {
     # Assign the correct folder mount point
     try {
-        Add-PartitionAccessPath -DiskNumber $diskImage.Number -PartitionNumber $partition.PartitionNumber -AccessPath $DevDrivePath -ErrorAction Stop
+        Add-PartitionAccessPath -DiskNumber $DiskImage.Number -PartitionNumber $Partition.PartitionNumber -AccessPath $DevDrivePath -ErrorAction Stop
         Write-Host "VHD mounted at ${DevDrivePath}" -ForegroundColor Green
     } catch {
         Write-Error "Failed to mount VHD at ${DevDrivePath}: $_"
@@ -235,17 +235,40 @@ if(-not $DevDriveIsMounted) {
 # ---------------------------------------------------------------
 Write-Host "`n[6/$TotalSteps] Trusting Dev Drive..." -ForegroundColor Yellow
 
-$trustQuery = (fsutil devdrv query $devDriveVolumeID 2>&1) | Out-String
-if ($trustQuery -match "Trusted") {
-    Write-Host "Status: Trusted (already trusted on this machine)" -ForegroundColor Green
-} else {
+$TrustQuery = (fsutil devdrv query $DevDriveVolumeID 2>&1) | Out-String
+if ($TrustQuery -match "not trusted") {
     fsutil devdrv trust $DevDrivePath | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Error "fsutil devdrv trust failed. Try running manually: fsutil devdrv trust ${DevDrivePath}"
     } else {
         Write-Host "Status: Trusted" -ForegroundColor Green
     }
+} else {
+    Write-Host "Status: Trusted (already trusted on this machine)" -ForegroundColor Green
 }
+
+# ---------------------------------------------------------------
+# STEP 7: Ensure Anti-virus Performance Mode is ON
+# ---------------------------------------------------------------
+Write-Host "`n[7/$TotalSteps] Enabled Windows Defender Performance Mode..." -ForegroundColor Yellow
+
+$IsPerformanceModeEnabled = ((Get-MpPreference).PerformanceModeStatus | Out-String).Trim() -eq "1"
+if ($IsPerformanceModeEnabled) {
+    Write-Host "Performance mode is already active" -ForegroundColor Green
+} else {
+    Write-Host "Enabling performance mode for Windows Defender..." -ForegroundColor Green
+    Set-MpPreference -PerformanceModeStatus Enabled
+
+    $IsPerformanceModeEnabled = ((Get-MpPreference).PerformanceModeStatus | Out-String).Trim() -eq "1"
+    if ($IsPerformanceModeEnabled) {
+        Write-Host "Performance mode is enabled" -ForegroundColor Green
+    } else {
+        Write-Error "Performance mode could not be enabled. Please check this manually!"
+        Read-Host "Press Enter to close"
+        exit 1
+    }
+}
+
 
 Write-Host "`n=== Setup Complete! ===" -ForegroundColor Cyan
 Write-Host "   Drive letter: ${CurrentLetter}:" -ForegroundColor White

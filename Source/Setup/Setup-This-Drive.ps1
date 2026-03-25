@@ -35,7 +35,6 @@ Write-Host "`n"
 # Run through the main setup steps
 # ---------------------------------------------------------------
 . (Assert-FileExists ".\Assert-Target-Drive-Letter.ps1")
-. (Assert-FileExists ".\Mount-Virtual-Dev-Drive.ps1")
 . (Assert-FileExists ".\Assert-DevDrive-Status.ps1")
 . (Assert-FileExists ".\Shutdown-Wsl.ps1")
 . (Assert-FileExists ".\Move-GitConfig-File.ps1")

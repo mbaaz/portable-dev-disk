@@ -25,8 +25,7 @@ $HandlePath = "$env:TEMP\handle.exe"
 # Write welcome message and relevant configuration
 # ---------------------------------------------------------------
 Write-Header "EJECT DRIVE"
-Write-Config "Current Drive Letter: ${CurrentLetter}"
-Write-Config "     Handle.exe Path: ${HandlePath}"
+Write-Config "Handle.exe Path: ${HandlePath}"
 
 
 # ---------------------------------------------------------------
@@ -81,21 +80,44 @@ Start-Sleep -Milliseconds 1500
 
 
 # ---------------------------------------------------------------
-# Cycle the drive offline and online to help release any remain-
-# ing locks. After this, the drive should be safe to remove.
+# Find the Disk Numbers for the disk(s) involved
 # ---------------------------------------------------------------
-$DriveDiskNumber = ((("select volume ${CurrentLetter}:", "detail volume" | diskpart) | Out-String) -Split "`r`n" | Select-String -Pattern "(?<=Disk )\d+").matches[0].Value
+function Get-DriveDiskNumber($DriveLetter) {
+    $DriveDiskNumber = ((("select volume ${CurrentLetter}:", "detail volume" | diskpart) | Out-String) -Split "`r`n" | Select-String -Pattern "(?<=Disk )\d+").matches[0].Value
+    Write-Host "Drive ${DriveLetter}: is on Disk ${DriveDiskNumber}" -ForegroundColor Cyan
+    return $DriveDiskNumber
+}
+$DiskNumbers = $Drives | ForEach-Object { Get-DriveDiskNumber $_.TargetLetter } | Select-Object -Unique 
 
-# Offline the entire disk to ensure all volumes on the disk are released
-"select disk ${DriveDiskNumber}", "offline disk" | diskpart | Out-Null
+
+# ---------------------------------------------------------------
+# Offline the disk(s) to ensure all volume locks on the disk(s)
+# are released
+# ---------------------------------------------------------------
+$DiskNumbers | ForEach-Object {
+    "select disk ${_}", "offline disk" | diskpart | Out-Null
+}
 Start-Sleep -Milliseconds 1500
 
-# Online the disk again so it shows up as "Safe to Remove" in Windows Explorer
-"select disk ${DriveDiskNumber}", "online disk" | diskpart | Out-Null
+
+# ---------------------------------------------------------------
+# Online the disk(s) again so it shows up yet again
+# ---------------------------------------------------------------
+$DiskNumbers | ForEach-Object {
+    # Online the disk again so it shows up as "Safe to Remove" in Windows Explorer
+    "select disk ${_}", "online disk" | diskpart | Out-Null
+}
 Start-Sleep -Milliseconds 1500
 
-Write-Host "`nDrive should now be safe to remove." -ForegroundColor Green -BackgroundColor White
+
+# ---------------------------------------------------------------
+# After this cycling of disk(s) it should be safe to eject
+# ---------------------------------------------------------------
+Write-Host "`n-------------------------------------------" -ForegroundColor Red
+Write-Host "||   DRIVE SHOULD NOW BE SAFE TO EJECT   ||" -ForegroundColor Red
+Write-Host "-------------------------------------------`n" -ForegroundColor Red
 Read-Host "Press Enter to continue.."
+
 
 # ---------------------------------------------------------------
 # Re-enable Windows Defender real-time monitoring if it was

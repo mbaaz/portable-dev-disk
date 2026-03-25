@@ -27,17 +27,6 @@ Write-Header "ASSERT DOCKER DEV ENVIRONMENTS ARE SHUT DOWN"
 # ---------------------------------------------------------------
 # Check status of each Dev Environment and stop if running
 # ---------------------------------------------------------------
-$vhd = Get-DiskImage -ImagePath $DevDriveVhdPath
-if($vhd.Attached -eq $false) {
-    Write-Message "Virtual Dev Drive is not mounted - scripts unavailable."
-    exit 0
-    return
-}
-
-
-# ---------------------------------------------------------------
-# Check status of each Dev Environment and stop if running
-# ---------------------------------------------------------------
 $DockerDevEnvironments | ForEach-Object {
     $path = $_.Path
     $name = $_.Name

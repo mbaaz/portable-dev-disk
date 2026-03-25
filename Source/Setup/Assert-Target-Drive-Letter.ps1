@@ -30,50 +30,18 @@ Assert-RunningAsAdministrator
 
 
 # ---------------------------------------------------------------
-# Get the volume GUID for the drive
-# ---------------------------------------------------------------
-if($UseCurrentDrive) {
-    Write-Message "Using current drive detection method"
-    $ScriptDriveLetter = (Split-Path -Qualifier $PSScriptRoot).TrimEnd(":").ToUpper()
-    $VolumeGUID = Get-VolumeGUIDFromDriveLetter $ScriptDriveLetter
-} else {
-    Write-Message "Using hardcoded volume GUID from config"
-    $VolumeGUID = $UseVolumeGUID
-}
-if (-not $VolumeGUID) {
-    Write-Error "`nVolume GUID '${VolumeGUID}' is not available"
-    Write-PostError
-}
-Write-Config "         Volume GUID: ${VolumeGUID}"
-
-
-# ---------------------------------------------------------------
-# Find current Volume
-# ---------------------------------------------------------------
-$Volume = Get-Volume -UniqueId $VolumeGUID
-if (-not $Volume) {
-    Write-Error "Could not find Volume"
-    Write-PostError
-}
-
-
-# ---------------------------------------------------------------
-# Find current Partition
-# ---------------------------------------------------------------
-$Partition = Get-Partition -Volume $Volume | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
-if (-not $Partition) {
-    Write-Error "Could not find Partition"
-    Write-PostError
-}
-
-
-# ---------------------------------------------------------------
 # Perform Drive Letter Assertions
 # ---------------------------------------------------------------
-if (Assert-DriveLetter -Partition $Partition -TargetLetter $DevDataDriveTargetLetter) {   
-    $ScriptRoot = $ScriptRoot.Replace($CurrentLetter + ":", $DevDataDriveTargetLetter + ":")
-    Write-Success "Updated ScriptRoot to match new drive letter"
-    Write-Config "  > ScriptRoot: ${ScriptRoot}"
+$Drives | ForEach-Object {
+    if(Assert-DriveLetter -VolumeID $_.VolumeGUID -TargetLetter $_.TargetLetter) {
+        if($_.IsScriptRootDrive) {
+            $ScriptRoot = $ScriptRoot.Replace($CurrentLetter + ":", $_.TargetLetter + ":")
+    
+            Write-Success "`nUpdated ScriptRoot to match new drive letter"
+            Write-Config "  > ScriptRoot: ${ScriptRoot}"
+        }
+    }
+    Write-Host ""
 }
 
 

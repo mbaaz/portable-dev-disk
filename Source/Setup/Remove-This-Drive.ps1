@@ -37,7 +37,6 @@ Write-Host "`n"
 # ---------------------------------------------------------------
 . (Assert-FileExists ".\Assert-DevEnv-IsShutDown.ps1")
 . (Assert-FileExists ".\Backup-Sourcetree-Settings.ps1")
-. (Assert-FileExists ".\Detach-Virtual-Dev-Drive.ps1")
 . (Assert-FileExists ".\Eject-Drive.ps1")
 
 

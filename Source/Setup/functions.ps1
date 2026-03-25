@@ -86,7 +86,7 @@ function Assert-DriveLetter {
     [cmdletbinding()]
     param(
         [parameter(Mandatory)]
-        [ciminstance] $Partition,
+        [string] $VolumeID,
 
         [parameter(Mandatory)]
         [string] $TargetLetter
@@ -98,16 +98,29 @@ function Assert-DriveLetter {
     # ---------------------------------------------------------------
     # Get the current drive letter for this volume
     # ---------------------------------------------------------------
-    Write-Config "  > Target Letter: [${TargetLetter}]"
+    Write-Config "  >     Volume ID: ${VolumeID}"
+    Write-Config "  > Target Letter: ${TargetLetter}:`\"
 
 
     # ---------------------------------------------------------------
-    # Make sure we have a Partition
+    # Find current Volume
     # ---------------------------------------------------------------
-    if (-not $Partition) {
-        Write-Error "  > Partition is invalid"
+    $Volume = Get-Volume -UniqueId $VolumeID
+    if (-not $Volume) {
+        Write-Error "Could not find Volume"
         Write-PostError
-        return $false
+        exit 1;
+    }
+
+
+    # ---------------------------------------------------------------
+    # Find current Partition
+    # ---------------------------------------------------------------
+    $Partition = Get-Partition -Volume $Volume | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
+    if (-not $Partition) {
+        Write-Error "Could not find Partition"
+        Write-PostError
+        exit 1;
     }
 
 

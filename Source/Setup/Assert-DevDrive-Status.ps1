@@ -20,7 +20,6 @@ function Get-FilePath($filePath) {
 # Write welcome message and relevant configuration
 # ---------------------------------------------------------------
 Write-Header "ASSERT DEV DRIVE STATUS"
-Write-Config "   DevDrive VHD Path: ${DevDriveVhdPath}"
 
 
 # ---------------------------------------------------------------
@@ -31,48 +30,32 @@ Assert-RunningAsAdministrator
 
 
 # ---------------------------------------------------------------
-# Find the DevDrive Volume GUID
-# ---------------------------------------------------------------
-$DiskImage = Get-DiskImage -ImagePath $DevDriveVhdPath 2>$null
-$Partition = Get-Partition -DiskNumber $DiskImage.Number | Where-Object { $_.Type -ne "Reserved" } | Select-Object -First 1
-if (-not $partition) {
-    Write-Error "Could not find partition inside mounted DevDrive VHD"
-    Write-PostError
-}
-
-$DevDriveVolumeID = ($Partition.AccessPaths | Where-Object { $_ -like "\\?\Volume*" } | Select-Object -First 1)
-if (-not $DevDriveVolumeID) {
-    Write-Error "Could not determine volume GUID of mounted DevDrive VHD"
-    Write-PostError
-}
-Write-Config "DevDrive Volume GUID: ${DevDriveVolumeID}"
-
-
-# ---------------------------------------------------------------
-# Trust the Dev Drive
+# Trusting Dev Drive(s)
 # ---------------------------------------------------------------
 Write-Message "Trusting Dev Drive..."
 
-function Test-IsDevDriveTrusted($VolumeID) {
-    $IsTrustedQuery = (fsutil devdrv query $VolumeID 2>&1) | Out-String
+function Test-IsDevDriveTrusted($VolumeGUID) {
+    $IsTrustedQuery = (fsutil devdrv query $VolumeGUID 2>&1) | Out-String
     return $IsTrustedQuery -notmatch "not trusted"
 }
-function Assert-DevDriveIsTrusted($VolumeID) {
-    if (-not (Test-IsDevDriveTrusted $VolumeID)) {
-        fsutil devdrv trust $VolumeID | Out-Null
+function Assert-DevDriveIsTrusted($VolumeGUID) {
+    if (-not (Test-IsDevDriveTrusted $VolumeGUID)) {
+        fsutil devdrv trust $VolumeGUID | Out-Null
         return [bool]($LASTEXITCODE -eq 0)
     }
     return $true
 }
 
-if (Test-IsDevDriveTrusted $DevDriveVolumeID) {
-    Write-Success "DevDrive is already Trusted on this machine"
-} else {
-    if (Assert-DevDriveIsTrusted $DevDriveVolumeID) {
-        Write-Success "DevDrive is now Trusted on this machine"
+$Drives | Where-Object { $_.IsDevDrive } | ForEach-Object {
+    if (Test-IsDevDriveTrusted $_.VolumeGUID) {
+        Write-Success "DevDrive is already Trusted on this machine"
     } else {
-        Write-Error "Unsuccessful in trusting the Dev Drive"
-        Write-PostError
+        if (Assert-DevDriveIsTrusted $_.VolumeGUID) {
+            Write-Success "DevDrive is now Trusted on this machine"
+        } else {
+            Write-Error "Unsuccessful in trusting the Dev Drive"
+            Write-PostError
+        }
     }
 }
 

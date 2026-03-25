@@ -20,7 +20,7 @@ function Get-FilePath($filePath) {
 # Write welcome message and relevant configuration
 # ---------------------------------------------------------------
 Write-Header "*****WELCOME*****"
-Write-Config "***** RELEVANT CONFIG: ${ScriptRoot}*****"
+Write-Config "***** RELEVANT CONFIG: ${ScriptRoot} *****"
 
 
 # ---------------------------------------------------------------

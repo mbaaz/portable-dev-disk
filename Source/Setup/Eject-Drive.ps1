@@ -94,8 +94,8 @@ Start-Sleep -Milliseconds 1500
 "select disk ${DriveDiskNumber}", "online disk" | diskpart | Out-Null
 Start-Sleep -Milliseconds 1500
 
-
-Read-Host "Drive should now be safe to remove. Press Enter to continue.."
+Write-Host "`nDrive should now be safe to remove." -ForegroundColor Green -BackgroundColor White
+Read-Host "Press Enter to continue.."
 
 # ---------------------------------------------------------------
 # Re-enable Windows Defender real-time monitoring if it was
